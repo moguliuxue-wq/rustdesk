@@ -38,6 +38,19 @@ def main():
     role_name = args.role.title()
     # Rename only AFTER proving that the native library contains the correct role.
     (bundle / 'rustdesk.exe').rename(bundle / f'RustDesk{role_name}.exe')
+    # Exercise Flutter/plugin initialization too. This is a launch smoke test,
+    # not a substitute for a consent/disconnect test with a real second desktop.
+    process = subprocess.Popen([str(bundle / f'RustDesk{role_name}.exe')], cwd=bundle)
+    try:
+        try:
+            code = process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise RuntimeError(f'GUI exited during launch smoke test: {code}')
+    finally:
+        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                       capture_output=True, check=False)
     (bundle / 'README.txt').write_text(
         f'RustDesk 1.5.1 {role_name} (Windows x64, unsigned portable bundle)\n'
         f'Extract the entire ZIP and launch RustDesk{role_name}.exe.\n'
@@ -51,7 +64,7 @@ def main():
              for p in sorted(bundle.rglob('*')) if p.is_file()}
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     manifest = {'version': '1.5.1', 'role': args.role, 'commit': revision,
-                'verification': ['DLL role export', 'EXE --version'],
+                'verification': ['DLL role export', 'EXE --version', '10 second GUI launch'],
                 'interactive_session_tested': False, 'sha256': files}
     (bundle / 'build-manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     args.output.mkdir(parents=True, exist_ok=True)

@@ -1291,6 +1291,11 @@ impl Connection {
                     }
                     MessageInput::BlockOn => {
                         if crate::role::AGENT {
+                            Self::send_block_input_error(
+                                &tx,
+                                back_notification::BlockInputState::BlkOnFailed,
+                                "Disabled in attended Agent".into(),
+                            );
                             continue;
                         }
                         let (ok, msg) = crate::platform::block_input(true);
@@ -2883,9 +2888,9 @@ impl Connection {
                     log::warn!("ipc to connection manager exit: {}", err);
                     // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
                     #[cfg(windows)]
-                    if !crate::platform::is_prelogin()
+                    if crate::role::AGENT || (!crate::platform::is_prelogin()
                         && !err.to_string().contains(crate::platform::EXPLORER_EXE)
-                        && !crate::hbbs_http::sync::is_pro()
+                        && !crate::hbbs_http::sync::is_pro())
                     {
                         allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
                     }
@@ -5174,10 +5179,7 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
-        if crate::role::AGENT {
-            return;
-        }
-        if !self.is_authed_remote_conn() || !self.privacy_mode {
+        if crate::role::AGENT || !self.is_authed_remote_conn() || !self.privacy_mode {
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,
                 impl_key,

@@ -58,7 +58,8 @@ are required. Optional printer / USB virtual-display drivers are not bundled by 
 workflow. Normal desktop control does not require those drivers. Signing is not configured.
 
 Packaging fails unless all core bundle files exist, Windows can load the actual DLL,
-the DLL export identifies the requested role, and the compiled EXE reports 1.5.1.
+the DLL export identifies the requested role, the compiled EXE reports 1.5.1,
+and the packaged GUI process survives a ten-second launch smoke test.
 The ZIP includes source commit and per-file SHA-256 hashes; a ZIP hash is uploaded too.
 These checks establish build identity and startup, not successful remote control.
 
