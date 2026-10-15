@@ -106,6 +106,8 @@ def parse_rc_features(feature):
 
 def make_parser():
     parser = argparse.ArgumentParser(description='Build script.')
+    parser.add_argument('--role', choices=['standard', 'controller', 'agent'],
+                        default='standard', help='Compile a Windows Flutter role')
     parser.add_argument(
         '-f',
         '--feature',
@@ -314,6 +316,12 @@ def linux_packaging_branch():
 
 def get_features(args):
     features = ['inline'] if not args.flutter else []
+    if args.role != 'standard':
+        if not args.flutter:
+            raise ValueError('--role requires --flutter')
+        if args.skip_cargo:
+            raise ValueError('--role cannot reuse an unchecked DLL with --skip-cargo')
+        features.append('role-' + args.role)
     if args.hwcodec:
         features.append('hwcodec')
     if args.vram:
@@ -966,14 +974,14 @@ def build_flutter_arch_manjaro(version, features):
     system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')
 
 
-def build_flutter_windows(version, features, skip_portable_pack):
+def build_flutter_windows(version, features, skip_portable_pack, role='standard'):
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
         if not os.path.exists("target/release/librustdesk.dll"):
             print("cargo build failed, please check rust source code.")
             exit(-1)
     os.chdir('flutter')
-    system2('flutter build windows --release')
+    system2(f'flutter build windows --release --dart-define=RUSTDESK_ROLE={role}')
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
@@ -1041,7 +1049,7 @@ def main():
         os.chdir('../../..')
 
         if flutter:
-            build_flutter_windows(version, features, args.skip_portable_pack)
+            build_flutter_windows(version, features, args.skip_portable_pack, args.role)
             return
         system2('cargo build --locked --release --features ' + features)
         # system2('upx.exe target/release/rustdesk.exe')

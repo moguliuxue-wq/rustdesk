@@ -370,6 +370,7 @@ pub struct Connection {
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    local_click_approved: bool,
     // The place among the unauthorized connections; given back at authorization.
     unauthorized_id: Option<UnauthorizedID>,
     require_2fa: Option<totp_rs::TOTP>,
@@ -529,6 +530,9 @@ impl Connection {
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
     ) {
+        if crate::role::CONTROLLER {
+            return;
+        }
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
@@ -586,6 +590,7 @@ impl Connection {
             port_forward_address: "".to_owned(),
             tx_to_cm,
             authorized: false,
+            local_click_approved: false,
             unauthorized_id: Some(unauthorized),
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
@@ -749,6 +754,7 @@ impl Connection {
                 Some(data) = rx_from_cm.recv() => {
                     match data {
                         ipc::Data::Authorize => {
+                            conn.local_click_approved = true;
                             conn.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::Click);
                             conn.require_2fa.take();
                             if !conn.send_logon_response_and_keep_alive().await {
@@ -778,7 +784,7 @@ impl Connection {
                             break;
                         }
                         ipc::Data::CmErr(e) => {
-                            if e != "expected" {
+                            if crate::role::AGENT || e != "expected" {
                                 // cm closed before connection
                                 conn.on_close(&format!("connection manager error: {}", e), false).await;
                                 break;
@@ -1284,6 +1290,9 @@ impl Connection {
                         handle_pointer(&msg, id);
                     }
                     MessageInput::BlockOn => {
+                        if crate::role::AGENT {
+                            continue;
+                        }
                         let (ok, msg) = crate::platform::block_input(true);
                         if ok {
                             block_input_mode = true;
@@ -1849,6 +1858,10 @@ impl Connection {
     // Returns whether this connection should be kept alive.
     // `true` does not necessarily mean authorization succeeded (e.g. REQUIRE_2FA case).
     async fn send_logon_response_and_keep_alive(&mut self) -> bool {
+        // Central gate also covers trusted devices, reconnects, 2FA and side switching.
+        if crate::role::AGENT && !self.local_click_approved {
+            return false;
+        }
         if self.authorized {
             return true;
         }
@@ -3038,7 +3051,8 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
+            if crate::role::AGENT
+                || (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -3147,6 +3161,9 @@ impl Connection {
                 }
             }
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
+            if crate::role::SPLIT {
+                return false;
+            }
             #[cfg(feature = "flutter")]
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Some(lr) = _s.lr.clone().take() {
@@ -3980,6 +3997,9 @@ impl Connection {
                     #[cfg(feature = "flutter")]
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::SwitchSidesRequest(s)) => {
+                        if crate::role::SPLIT {
+                            return true;
+                        }
                         if let Ok(uuid) = uuid::Uuid::from_slice(&s.uuid.to_vec()[..]) {
                             if crate::server::insert_pending_switch_sides_uuid(
                                 self.lr.my_id.clone(),
@@ -4671,6 +4691,9 @@ impl Connection {
 
     #[cfg(windows)]
     async fn handle_elevation_request(&mut self, para: portable_client::StartPara) {
+        if crate::role::AGENT {
+            return;
+        }
         let mut err;
         if !self.keyboard {
             err = "No permission".to_string();
@@ -5151,6 +5174,9 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
+        if crate::role::AGENT {
+            return;
+        }
         if !self.is_authed_remote_conn() || !self.privacy_mode {
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,

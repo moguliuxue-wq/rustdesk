@@ -431,6 +431,9 @@ impl Client {
         (i32, String),
         bool,
     )> {
+        if crate::role::AGENT {
+            bail!("Agent cannot initiate outgoing connections");
+        }
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }

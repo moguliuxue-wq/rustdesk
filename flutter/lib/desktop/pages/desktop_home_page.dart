@@ -1,3 +1,4 @@
+import '../role_mode.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -79,6 +80,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     final isIncomingOnly = bind.isIncomingOnly();
     final isOutgoingOnly = bind.isOutgoingOnly();
     final children = <Widget>[
+      if (isAgentBuild || isControllerBuild)
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(
+            isAgentBuild
+                ? 'Agent · 被控端\n每次连接须在本机点击允许。\n连接管理窗口可查看状态并断开。'
+                : 'Controller · 主控端\n仅发起连接；请等待对方明确允许。',
+            textAlign: TextAlign.center,
+          ),
+        ),
       if (!isOutgoingOnly) buildPresetPasswordWarning(),
       if (bind.isCustomClient())
         Align(
@@ -91,7 +102,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       ),
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
-      if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (!isOutgoingOnly && !isAgentBuild) buildPasswordBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
