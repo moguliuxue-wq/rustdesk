@@ -25,7 +25,7 @@ use base::{
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicI32, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
         Arc,
     },
     time::SystemTime,
@@ -36,6 +36,8 @@ pub type SessionID = uuid::Uuid;
 lazy_static::lazy_static! {
     static ref TEXTURE_RENDER_KEY: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
 }
+
+static AGENT_CAPTURE_DIAGNOSTIC_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn initialize(app_dir: &str, custom_client_config: &str) {
     flutter::async_tasks::start_flutter_async_runner();
@@ -50,6 +52,7 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
     } else {
         crate::read_custom_client(custom_client_config);
     }
+    crate::role::init();
     #[cfg(target_os = "android")]
     {
         // flexi_logger can't work when android_logger initialized.
@@ -1811,6 +1814,82 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     ui_interface::set_permanent_password_with_result(password)
 }
 
+/// Owner-only Agent enrollment from the local desktop UI. No default or
+/// server-provided password can opt a device into unattended access.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_enable_agent_unattended(password: String) -> bool {
+    if !crate::role::AGENT
+        || password.chars().count() < 12
+        || password.trim() != password.as_str()
+    {
+        return false;
+    }
+    if !ui_interface::set_permanent_password_with_result(password)
+        || !ui_interface::is_local_permanent_password_set()
+    {
+        return false;
+    }
+    crate::ipc::set_option(crate::role::AGENT_UNATTENDED_OPTION, "Y");
+    crate::role::agent_unattended_enabled()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_disable_agent_unattended() -> bool {
+    if !crate::role::AGENT {
+        return false;
+    }
+    // Disable first: even if clearing the password fails, no more automatic
+    // logins can succeed. The UI reports failure so the owner can retry.
+    crate::ipc::set_option(crate::role::AGENT_UNATTENDED_OPTION, "");
+    let password_cleared = ui_interface::set_permanent_password_with_result(String::new());
+    password_cleared && !crate::role::agent_unattended_enabled()
+}
+
+/// Enable only for the current local process. Closing Agent resets this state.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_set_agent_capture_diagnostic(enabled: bool) -> bool {
+    let allowed = crate::role::AGENT && cfg!(target_os = "windows") && enabled;
+    AGENT_CAPTURE_DIAGNOSTIC_ENABLED.store(allowed, Ordering::SeqCst);
+    allowed
+}
+
+/// Local, opt-in diagnostic only. It creates normal display capturers without
+/// taking, saving, or transmitting a frame and never changes another process.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_agent_capture_self_test() -> String {
+    if !crate::role::AGENT {
+        return serde_json::json!({ "error": "Agent only" }).to_string();
+    }
+    if !AGENT_CAPTURE_DIAGNOSTIC_ENABLED.load(Ordering::SeqCst) {
+        return serde_json::json!({ "error": "Diagnostic mode is off" }).to_string();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return serde_json::json!({ "error": "Windows only" }).to_string();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match scrap::Display::all() {
+            Ok(displays) if !displays.is_empty() => {
+                let results = (0..displays.len().min(8))
+                    .map(|index| {
+                        let error = crate::video_service::test_create_capturer(0, index, 1000);
+                        serde_json::json!({
+                            "display": index + 1,
+                            "ok": error.is_empty(),
+                            "error": error,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({ "display_count": displays.len(), "results": results })
+                    .to_string()
+            }
+            Ok(_) => serde_json::json!({ "error": "No displays found" }).to_string(),
+            Err(error) => serde_json::json!({ "error": error.to_string() }).to_string(),
+        }
+    }
+}
+
 pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
@@ -2735,6 +2814,8 @@ pub fn main_get_common(key: String) -> String {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
+    } else if key == "agent-unattended-enabled" {
+        return crate::role::agent_unattended_enabled().to_string();
     } else {
         if key.starts_with("download-data-") {
             let id = key.replace("download-data-", "");

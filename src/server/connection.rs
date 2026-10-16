@@ -315,6 +315,15 @@ enum ConnAuditPrimaryAuth {
     SwitchSides = 4,
 }
 
+fn agent_login_has_owner_authorization(
+    local_click: bool,
+    unattended_enabled: bool,
+    primary_auth: ConnAuditPrimaryAuth,
+) -> bool {
+    local_click
+        || (unattended_enabled && primary_auth == ConnAuditPrimaryAuth::PermanentPassword)
+}
+
 impl ConnAuditPrimaryAuth {
     fn as_i64(self) -> i64 {
         self as i64
@@ -370,6 +379,7 @@ pub struct Connection {
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    local_click_approved: bool,
     // The place among the unauthorized connections; given back at authorization.
     unauthorized_id: Option<UnauthorizedID>,
     require_2fa: Option<totp_rs::TOTP>,
@@ -529,6 +539,9 @@ impl Connection {
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
     ) {
+        if crate::role::CONTROLLER {
+            return;
+        }
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
@@ -586,6 +599,7 @@ impl Connection {
             port_forward_address: "".to_owned(),
             tx_to_cm,
             authorized: false,
+            local_click_approved: false,
             unauthorized_id: Some(unauthorized),
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
@@ -749,6 +763,7 @@ impl Connection {
                 Some(data) = rx_from_cm.recv() => {
                     match data {
                         ipc::Data::Authorize => {
+                            conn.local_click_approved = true;
                             conn.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::Click);
                             conn.require_2fa.take();
                             if !conn.send_logon_response_and_keep_alive().await {
@@ -778,7 +793,7 @@ impl Connection {
                             break;
                         }
                         ipc::Data::CmErr(e) => {
-                            if e != "expected" {
+                            if crate::role::AGENT || e != "expected" {
                                 // cm closed before connection
                                 conn.on_close(&format!("connection manager error: {}", e), false).await;
                                 break;
@@ -797,6 +812,17 @@ impl Connection {
                         }
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
+                            // A connection manager may receive policy from a custom server.
+                            // Never let it turn Agent's disabled capabilities back on.
+                            if crate::role::AGENT && enabled && matches!(name.as_str(),
+                                "restart" | "block_input" | "privacy_mode")
+                            {
+                                conn.send_to_cm(ipc::Data::SwitchPermission {
+                                    name,
+                                    enabled: false,
+                                });
+                                continue;
+                            }
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
                                 conn.send_permission(Permission::Keyboard, enabled).await;
@@ -961,6 +987,9 @@ impl Connection {
                         }
                         #[cfg(windows)]
                         ipc::Data::DataPortableService(ipc::DataPortableService::RequestStart) => {
+                            if crate::role::AGENT {
+                                continue;
+                            }
                             if let Err(e) = portable_client::start_portable_service(portable_client::StartPara::Direct) {
                                 log::error!("Failed to start portable service from cm: {:?}", e);
                             }
@@ -1284,6 +1313,14 @@ impl Connection {
                         handle_pointer(&msg, id);
                     }
                     MessageInput::BlockOn => {
+                        if crate::role::AGENT {
+                            Self::send_block_input_error(
+                                &tx,
+                                back_notification::BlockInputState::BlkOnFailed,
+                                "Disabled in attended Agent".into(),
+                            );
+                            continue;
+                        }
                         let (ok, msg) = crate::platform::block_input(true);
                         if ok {
                             block_input_mode = true;
@@ -1849,6 +1886,17 @@ impl Connection {
     // Returns whether this connection should be kept alive.
     // `true` does not necessarily mean authorization succeeded (e.g. REQUIRE_2FA case).
     async fn send_logon_response_and_keep_alive(&mut self) -> bool {
+        // Central gate also covers trusted devices, reconnects, 2FA and side switching.
+        // Only the owner's local password can replace a local click after opt-in.
+        if crate::role::AGENT
+            && !agent_login_has_owner_authorization(
+                self.local_click_approved,
+                crate::role::agent_unattended_enabled(),
+                self.conn_audit_primary_auth,
+            )
+        {
+            return false;
+        }
         if self.authorized {
             return true;
         }
@@ -2599,6 +2647,17 @@ impl Connection {
     }
 
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+        if crate::role::agent_unattended_enabled() {
+            let (storage, salt) = Config::get_local_permanent_password_storage_and_salt();
+            if local_permanent_password_storage_is_usable_for_auth(&storage, &salt)
+                && self.validate_password_storage(&storage)
+            {
+                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
+                return true;
+            }
+            // Never accept a temporary or preset/server password for Agent opt-in.
+            return false;
+        }
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
@@ -2674,6 +2733,9 @@ impl Connection {
 
     #[inline]
     pub fn is_permission_enabled_locally(enable_prefix_option: &str) -> bool {
+        if Self::agent_forbids_permission(enable_prefix_option) {
+            return false;
+        }
         #[cfg(feature = "flutter")]
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
@@ -2690,10 +2752,26 @@ impl Connection {
         )
     }
 
+    #[inline]
+    fn agent_forbids_permission(option: &str) -> bool {
+        crate::role::AGENT
+            && matches!(
+                option,
+                keys::OPTION_ENABLE_TERMINAL
+                    | keys::OPTION_ENABLE_TUNNEL
+                    | keys::OPTION_ENABLE_REMOTE_RESTART
+                    | keys::OPTION_ENABLE_BLOCK_INPUT
+                    | keys::OPTION_ENABLE_PRIVACY_MODE
+            )
+    }
+
     fn permission(
         enable_prefix_option: &str,
         control_permissions: &Option<ControlPermissions>,
     ) -> bool {
+        if Self::agent_forbids_permission(enable_prefix_option) {
+            return false;
+        }
         use hbb_common::rendezvous_proto::control_permissions::Permission;
         if let Some(control_permissions) = control_permissions {
             let permission = match enable_prefix_option {
@@ -2870,9 +2948,9 @@ impl Connection {
                     log::warn!("ipc to connection manager exit: {}", err);
                     // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
                     #[cfg(windows)]
-                    if !crate::platform::is_prelogin()
+                    if crate::role::AGENT || (!crate::platform::is_prelogin()
                         && !err.to_string().contains(crate::platform::EXPLORER_EXE)
-                        && !crate::hbbs_http::sync::is_pro()
+                        && !crate::hbbs_http::sync::is_pro())
                     {
                         allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
                     }
@@ -3038,8 +3116,12 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
+            if (crate::role::AGENT && !crate::role::agent_unattended_enabled())
+                || (!crate::role::AGENT
+                    && ((password::approve_mode() == ApproveMode::Click
+                        && !allow_logon_screen_password)
+                        || (password::approve_mode() == ApproveMode::Both
+                            && !password::has_valid_password())))
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
@@ -3056,7 +3138,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.is_recent_session(false) {
+            } else if !crate::role::AGENT && self.is_recent_session(false) {
                 if !self.send_logon_response_and_keep_alive().await {
                     return false;
                 }
@@ -3147,6 +3229,9 @@ impl Connection {
                 }
             }
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
+            if crate::role::SPLIT {
+                return false;
+            }
             #[cfg(feature = "flutter")]
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Some(lr) = _s.lr.clone().take() {
@@ -3939,7 +4024,7 @@ impl Connection {
                     }
                     Some(misc::Union::RestartRemoteDevice(_)) => {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        if self.restart {
+                        if !crate::role::AGENT && self.restart {
                             // force_reboot, not work on linux vm and macos 14
                             #[cfg(any(target_os = "linux", target_os = "windows"))]
                             match system_shutdown::force_reboot() {
@@ -3980,6 +4065,9 @@ impl Connection {
                     #[cfg(feature = "flutter")]
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::SwitchSidesRequest(s)) => {
+                        if crate::role::SPLIT {
+                            return true;
+                        }
                         if let Ok(uuid) = uuid::Uuid::from_slice(&s.uuid.to_vec()[..]) {
                             if crate::server::insert_pending_switch_sides_uuid(
                                 self.lr.my_id.clone(),
@@ -4671,6 +4759,9 @@ impl Connection {
 
     #[cfg(windows)]
     async fn handle_elevation_request(&mut self, para: portable_client::StartPara) {
+        if crate::role::AGENT {
+            return;
+        }
         let mut err;
         if !self.keyboard {
             err = "No permission".to_string();
@@ -5151,7 +5242,7 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
-        if !self.is_authed_remote_conn() || !self.privacy_mode {
+        if crate::role::AGENT || !self.is_authed_remote_conn() || !self.privacy_mode {
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,
                 impl_key,
@@ -7174,6 +7265,43 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 mod test {
     #[allow(unused)]
     use super::*;
+
+    #[cfg(feature = "role-agent")]
+    #[test]
+    fn agent_unattended_gate_requires_owner_enrollment_and_permanent_password() {
+        use ConnAuditPrimaryAuth::*;
+        assert!(agent_login_has_owner_authorization(true, false, Click));
+        assert!(!agent_login_has_owner_authorization(false, false, PermanentPassword));
+        assert!(!agent_login_has_owner_authorization(false, true, None));
+        assert!(!agent_login_has_owner_authorization(false, true, TemporaryPassword));
+        assert!(!agent_login_has_owner_authorization(false, true, SwitchSides));
+        assert!(agent_login_has_owner_authorization(false, true, PermanentPassword));
+    }
+
+    #[cfg(feature = "role-agent")]
+    #[test]
+    fn agent_rejects_disabled_permissions_from_server_and_local_settings() {
+        // Every two-bit permission is marked enabled by the server, so a false
+        // result proves Agent's restriction has higher priority.
+        let server_permissions = Some(ControlPermissions {
+            permissions: 0xaaaa_aaaa_aaaa_aaaa,
+            ..Default::default()
+        });
+        for option in [
+            keys::OPTION_ENABLE_TERMINAL,
+            keys::OPTION_ENABLE_TUNNEL,
+            keys::OPTION_ENABLE_REMOTE_RESTART,
+            keys::OPTION_ENABLE_BLOCK_INPUT,
+            keys::OPTION_ENABLE_PRIVACY_MODE,
+        ] {
+            assert!(!Connection::permission(option, &server_permissions), "{option}");
+            assert!(!Connection::is_permission_enabled_locally(option), "{option}");
+        }
+        assert!(Connection::permission(
+            keys::OPTION_ENABLE_KEYBOARD,
+            &server_permissions
+        ));
+    }
 
     // The registry is process-global and the harness runs tests in parallel threads, so every
     // test that admits connections holds this first; a poisoned lock is still a lock.
