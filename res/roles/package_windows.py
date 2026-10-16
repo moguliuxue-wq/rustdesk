@@ -56,7 +56,9 @@ def main():
         f'Extract the entire ZIP and launch RustDesk{role_name}.exe.\n'
         'Keep all DLLs and the data directory beside the EXE.\n'
         'Microsoft Visual C++ 2015-2022 x64 Runtime may be required.\n'
-        'Agent requires local click approval on every new connection.\n'
+        'Agent requires local click approval by default. The device owner may opt in\n'
+        'on the Agent home screen with a new local password (12+ characters); then\n'
+        'that password can authorize later sessions without a click.\n'
         'Use the visible connection manager Disconnect button or close its window to end sessions.\n'
         'Installation, unattended password access, privacy screen, input blocking,\n'
         'remote elevation, terminal and TCP tunnels are disabled in Agent.\n', encoding='utf-8')

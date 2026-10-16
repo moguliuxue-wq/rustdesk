@@ -1442,6 +1442,15 @@ class RustdeskImpl {
     throw UnimplementedError("mainSetPermanentPasswordWithResult");
   }
 
+  Future<bool> mainEnableAgentUnattended(
+      {required String password, dynamic hint}) {
+    throw UnimplementedError("mainEnableAgentUnattended");
+  }
+
+  Future<bool> mainDisableAgentUnattended({dynamic hint}) {
+    throw UnimplementedError("mainDisableAgentUnattended");
+  }
+
   Future<bool> mainCheckSuperUserPermission({dynamic hint}) {
     throw UnimplementedError("mainCheckSuperUserPermission");
   }

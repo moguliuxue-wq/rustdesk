@@ -315,6 +315,15 @@ enum ConnAuditPrimaryAuth {
     SwitchSides = 4,
 }
 
+fn agent_login_has_owner_authorization(
+    local_click: bool,
+    unattended_enabled: bool,
+    primary_auth: ConnAuditPrimaryAuth,
+) -> bool {
+    local_click
+        || (unattended_enabled && primary_auth == ConnAuditPrimaryAuth::PermanentPassword)
+}
+
 impl ConnAuditPrimaryAuth {
     fn as_i64(self) -> i64 {
         self as i64
@@ -1878,7 +1887,14 @@ impl Connection {
     // `true` does not necessarily mean authorization succeeded (e.g. REQUIRE_2FA case).
     async fn send_logon_response_and_keep_alive(&mut self) -> bool {
         // Central gate also covers trusted devices, reconnects, 2FA and side switching.
-        if crate::role::AGENT && !self.local_click_approved {
+        // Only the owner's local password can replace a local click after opt-in.
+        if crate::role::AGENT
+            && !agent_login_has_owner_authorization(
+                self.local_click_approved,
+                crate::role::agent_unattended_enabled(),
+                self.conn_audit_primary_auth,
+            )
+        {
             return false;
         }
         if self.authorized {
@@ -2631,6 +2647,17 @@ impl Connection {
     }
 
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+        if crate::role::agent_unattended_enabled() {
+            let (storage, salt) = Config::get_local_permanent_password_storage_and_salt();
+            if local_permanent_password_storage_is_usable_for_auth(&storage, &salt)
+                && self.validate_password_storage(&storage)
+            {
+                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
+                return true;
+            }
+            // Never accept a temporary or preset/server password for Agent opt-in.
+            return false;
+        }
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
@@ -3089,9 +3116,12 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if crate::role::AGENT
-                || (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
+            if (crate::role::AGENT && !crate::role::agent_unattended_enabled())
+                || (!crate::role::AGENT
+                    && ((password::approve_mode() == ApproveMode::Click
+                        && !allow_logon_screen_password)
+                        || (password::approve_mode() == ApproveMode::Both
+                            && !password::has_valid_password())))
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
@@ -3108,7 +3138,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.is_recent_session(false) {
+            } else if !crate::role::AGENT && self.is_recent_session(false) {
                 if !self.send_logon_response_and_keep_alive().await {
                     return false;
                 }
@@ -7235,6 +7265,18 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 mod test {
     #[allow(unused)]
     use super::*;
+
+    #[cfg(feature = "role-agent")]
+    #[test]
+    fn agent_unattended_gate_requires_owner_enrollment_and_permanent_password() {
+        use ConnAuditPrimaryAuth::*;
+        assert!(agent_login_has_owner_authorization(true, false, Click));
+        assert!(!agent_login_has_owner_authorization(false, false, PermanentPassword));
+        assert!(!agent_login_has_owner_authorization(false, true, None));
+        assert!(!agent_login_has_owner_authorization(false, true, TemporaryPassword));
+        assert!(!agent_login_has_owner_authorization(false, true, SwitchSides));
+        assert!(agent_login_has_owner_authorization(false, true, PermanentPassword));
+    }
 
     #[cfg(feature = "role-agent")]
     #[test]

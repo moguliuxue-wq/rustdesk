@@ -11,10 +11,10 @@ source, not a claim of a tagged stable release.
 | Behavior | Controller | Agent |
 |---|---|---|
 | Initiate remote sessions | Yes | Rejected in Rust client, including side switching |
-| Accept inbound sessions | No server startup; connection entry also rejects | Local click required for each connection |
+| Accept inbound sessions | No server startup; connection entry also rejects | Local click by default; owner may explicitly enroll a local password for unattended access |
 | Home screen | Outgoing connections | Local ID, role notice and online status |
 | Active connection status | Remote session window | Existing visible connection manager with peer and Disconnect |
-| Password / trusted-session automatic approval | No receiving | Cannot bypass the central local-click gate |
+| Password / trusted-session automatic approval | No receiving | Only an enrolled local permanent password may replace a click; temporary, preset and remembered sessions cannot |
 | Install / system service / remote elevation | Disabled | Disabled |
 | Privacy black screen / block local input | N/A | Rejected in native handlers |
 | Terminal / TCP tunnel | Can initiate to compatible standard hosts | Disabled |
@@ -28,9 +28,17 @@ not a claim that every unused source module has been removed.
 
 The Agent uses upstream's accept/reject connection manager. Closing that window or
 pressing Disconnect ends the session. No hidden connection-manager mode is permitted.
-The native authorization function additionally requires a local CM approval, covering
-passwords, reconnects, trusted devices, 2FA and switch-sides paths. A new connection
-needs new approval. This does not defend against malware already running as the local user.
+By default, the native authorization gate requires a local CM click for each connection,
+including reconnects and remembered sessions. The device owner can explicitly enable
+unattended access on Agent's home screen by confirming ownership and setting a new
+local password of at least 12 characters. Only that local password can authorize a
+later connection without a click; server presets and temporary passwords cannot.
+The connection manager remains visible while connected, with peer status and Disconnect.
+Revoking unattended access clears the password and restores click approval for new
+connections; an already active session must be disconnected in the manager. Closing
+Agent or the receiving process ends availability; this build does not install a service
+or silently start at login. This does not defend against malware already running as
+the local user.
 
 ## Build
 
@@ -61,7 +69,8 @@ The same artifact also contains a self-extracting `*-portable.exe` built from th
 verified bundle with the repository's native portable packer. It is one downloadable
 EXE, but extracts the same DLLs and `data/` files under LocalAppData when launched.
 The build verifies extraction and checks the role export of the extracted DLL.
-The attended approval window and native role restrictions apply to this form too.
+The same owner enrollment, connection-manager visibility and native role restrictions
+apply to this form too.
 RustDesk already records debug logs under the role's app data directory; its
 rendezvous server remains configurable. No shared default password is supplied.
 
@@ -74,10 +83,14 @@ These checks establish build identity and startup, not successful remote control
 ## Acceptance on two Windows desktops (required before production use)
 
 1. Start Controller and Agent; verify their distinct titles/home screens and Agent ID.
-2. Connect to Agent. Before local Allow, verify no screen/input/file access. Reject once.
-3. Connect again, click Allow on Agent, verify the visible peer/status and desktop control.
+2. In default mode, connect to Agent. Before local Allow, verify no screen/input/file
+   access. Reject once, reconnect and click Allow.
+3. On Agent, enroll unattended access with a fresh 12+ character password. Reconnect
+   using that password: no click is needed, but the CM must show peer/status and Disconnect.
+   Check that a temporary password, a server preset or a remembered session alone fails.
 4. Disconnect from Agent, then close its CM window during a second session; both end control.
-5. Reconnect with remembered password/session: a fresh local Allow is still required.
+5. Revoke unattended access in Agent, disconnect any existing session, then verify a
+   remembered password/session cannot reconnect without a fresh local Allow.
 6. Try Agent `--connect`, URI, file transfer and side switching; outgoing sessions must fail.
 7. Try Controller incoming direct IP and rendezvous; no receiving service/session is available.
 8. Try black screen and block input against Agent; local display/input remain usable.

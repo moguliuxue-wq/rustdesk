@@ -5,6 +5,19 @@ compile_error!("Select exactly one of role-controller and role-agent");
 pub const CONTROLLER: bool = cfg!(feature = "role-controller");
 pub const AGENT: bool = cfg!(feature = "role-agent");
 pub const SPLIT: bool = CONTROLLER || AGENT;
+pub const AGENT_UNATTENDED_OPTION: &str = "agent-unattended-enabled";
+
+/// An owner must opt in locally and set a usable *local* permanent password.
+/// A server-supplied preset password or an overridden option cannot enable this.
+pub fn agent_unattended_enabled() -> bool {
+    AGENT
+        && hbb_common::config::Config2::get()
+            .options
+            .get(AGENT_UNATTENDED_OPTION)
+            .map(String::as_str)
+            == Some("Y")
+        && hbb_common::config::Config::has_local_permanent_password()
+}
 
 pub const fn name() -> &'static str {
     if CONTROLLER { "Controller" } else if AGENT { "Agent" } else { "Standard" }

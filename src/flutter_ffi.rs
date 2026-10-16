@@ -1812,6 +1812,37 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     ui_interface::set_permanent_password_with_result(password)
 }
 
+/// Owner-only Agent enrollment from the local desktop UI. No default or
+/// server-provided password can opt a device into unattended access.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_enable_agent_unattended(password: String) -> bool {
+    if !crate::role::AGENT
+        || password.chars().count() < 12
+        || password.trim() != password.as_str()
+    {
+        return false;
+    }
+    if !ui_interface::set_permanent_password_with_result(password)
+        || !ui_interface::is_local_permanent_password_set()
+    {
+        return false;
+    }
+    crate::ipc::set_option(crate::role::AGENT_UNATTENDED_OPTION, "Y");
+    crate::role::agent_unattended_enabled()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn main_disable_agent_unattended() -> bool {
+    if !crate::role::AGENT {
+        return false;
+    }
+    // Disable first: even if clearing the password fails, no more automatic
+    // logins can succeed. The UI reports failure so the owner can retry.
+    crate::ipc::set_option(crate::role::AGENT_UNATTENDED_OPTION, "");
+    let password_cleared = ui_interface::set_permanent_password_with_result(String::new());
+    password_cleared && !crate::role::agent_unattended_enabled()
+}
+
 pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
@@ -2736,6 +2767,8 @@ pub fn main_get_common(key: String) -> String {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
+    } else if key == "agent-unattended-enabled" {
+        return crate::role::agent_unattended_enabled().to_string();
     } else {
         if key.starts_with("download-data-") {
             let id = key.replace("download-data-", "");

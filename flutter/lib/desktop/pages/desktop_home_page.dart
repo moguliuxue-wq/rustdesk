@@ -85,7 +85,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           padding: const EdgeInsets.all(12),
           child: Text(
             isAgentBuild
-                ? 'Agent · 被控端\n每次连接须在本机点击允许。\n连接管理窗口可查看状态并断开。'
+                ? 'Agent · 被控端\n连接管理窗口可查看状态并断开。'
                 : 'Controller · 主控端\n仅发起连接；请等待对方明确允许。',
             textAlign: TextAlign.center,
           ),
@@ -102,6 +102,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       ),
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
+      if (isAgentBuild) buildAgentUnattendedPanel(context),
       if (!isOutgoingOnly && !isAgentBuild) buildPasswordBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
@@ -194,6 +195,161 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       color: Theme.of(context).scaffoldBackgroundColor,
       child: ConnectionPage(),
     );
+  }
+
+  Widget buildAgentUnattendedPanel(BuildContext context) {
+    return FutureBuilder<String>(
+      future: bind.mainGetCommon(key: 'agent-unattended-enabled'),
+      builder: (context, snapshot) {
+        final enabled = snapshot.data == 'true';
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(enabled ? '无人值守访问：已开启' : '无人值守访问：未开启',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 5),
+              Text(enabled
+                  ? '使用本机设置的独立密码连接，无需逐次点击。连接窗口会显示对方并提供断开按钮。'
+                  : '默认每次连接都需要本机点击允许。设备所有者可以在这里设置独立密码后开启无人值守。'),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, children: [
+                OutlinedButton(
+                  onPressed: _showAgentUnattendedDialog,
+                  child: Text(enabled ? '更换访问密码' : '设置密码并开启'),
+                ),
+                if (enabled)
+                  TextButton(
+                    onPressed: _disableAgentUnattended,
+                    child: const Text('撤销无人值守'),
+                  ),
+              ]),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showAgentUnattendedDialog() async {
+    await windowManager.setSize(const Size(480, 600));
+    final password = TextEditingController();
+    final confirmation = TextEditingController();
+    var ownerConfirmed = false;
+    var saving = false;
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('开启 Agent 无人值守访问'),
+          content: SingleChildScrollView(
+            child: SizedBox(
+              width: 350,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('请在被控设备本机设置专用密码。此后持有密码的人可连接；连接状态和断开入口始终可见。'),
+                  TextField(
+                    controller: password,
+                    obscureText: true,
+                    maxLength: bind.mainMaxEncryptLen(),
+                    decoration: const InputDecoration(labelText: '专用密码（至少 12 个字符）'),
+                  ),
+                  TextField(
+                    controller: confirmation,
+                    obscureText: true,
+                    maxLength: bind.mainMaxEncryptLen(),
+                    decoration: const InputDecoration(labelText: '再次输入密码'),
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: ownerConfirmed,
+                    title: const Text('我是设备所有者或已获授权，确认开启无人值守访问'),
+                    onChanged: saving
+                        ? null
+                        : (value) => updateDialog(() => ownerConfirmed = value == true),
+                  ),
+                  if (error != null)
+                    Text(error!, style: const TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            ElevatedButton(
+              onPressed: !ownerConfirmed || saving
+                  ? null
+                  : () async {
+                      final value = password.text;
+                      if (value.length < 12 || value.trim() != value) {
+                        updateDialog(() => error = '密码至少 12 个字符，且首尾不能有空格');
+                        return;
+                      }
+                      if (value != confirmation.text) {
+                        updateDialog(() => error = '两次输入的密码不一致');
+                        return;
+                      }
+                      updateDialog(() {
+                        saving = true;
+                        error = null;
+                      });
+                      var ok = false;
+                      try {
+                        ok = await bind.mainEnableAgentUnattended(password: value);
+                      } catch (_) {
+                        ok = false;
+                      }
+                      if (!dialogContext.mounted) return;
+                      if (ok) {
+                        Navigator.of(dialogContext).pop();
+                        if (mounted) setState(() {});
+                      } else {
+                        updateDialog(() {
+                          saving = false;
+                          error = '开启失败，请确认本机密码设置未被锁定后重试';
+                        });
+                      }
+                    },
+              child: const Text('确认开启'),
+            ),
+          ],
+        ),
+      ),
+    );
+    password.dispose();
+    confirmation.dispose();
+    if (mounted) _updateWindowSize();
+  }
+
+  Future<void> _disableAgentUnattended() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('撤销无人值守访问？'),
+        content: const Text('将清除专用密码。以后新连接必须在本机点击允许；已有连接请在连接管理窗口断开。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('撤销'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final ok = await bind.mainDisableAgentUnattended();
+    if (!mounted) return;
+    setState(() {});
+    if (!ok) showToast('已停止无人值守，但清除密码失败，请重试');
   }
 
   buildIDBoard(BuildContext context) {
