@@ -60,7 +60,7 @@ def main():
         'on the Agent home screen with a new local password (12+ characters); then\n'
         'that password can authorize later sessions without a click.\n'
         'Use the visible connection manager Disconnect button or close its window to end sessions.\n'
-        'Installation, unattended password access, privacy screen, input blocking,\n'
+        'Installation, privacy screen, input blocking,\n'
         'remote elevation, terminal and TCP tunnels are disabled in Agent.\n', encoding='utf-8')
     files = {p.relative_to(bundle).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(bundle.rglob('*')) if p.is_file()}

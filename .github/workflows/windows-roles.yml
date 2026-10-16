@@ -124,7 +124,7 @@ jobs:
       run: cargo test --locked --release --lib --features flutter,hwcodec,vram,role-agent agent_ -- --test-threads=1
     - name: Stage and verify role bundle
       run: python res/roles/package_windows.py --role ${{ matrix.role }} --bundle flutter/build/windows/x64/runner/Release --output dist
-    - name: Build and verify attended one-file EXE
+    - name: Build and verify one-file EXE
       run: |
         python -m pip install -r libs/portable/requirements.txt
         python res/roles/build_onefile.py --role ${{ matrix.role }} --bundle flutter/build/windows/x64/runner/Release --output dist

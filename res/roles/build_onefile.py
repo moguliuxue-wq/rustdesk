@@ -1,4 +1,4 @@
-"""Build and verify an attended one-file Windows role from a verified bundle."""
+"""Build and verify a one-file Windows role from a verified bundle."""
 import argparse
 import ctypes
 import hashlib
