@@ -57,6 +57,14 @@ is not standalone. Windows x64 and the Microsoft Visual C++ 2015–2022 x64 runt
 are required. Optional printer / USB virtual-display drivers are not bundled by this
 workflow. Normal desktop control does not require those drivers. Signing is not configured.
 
+The same artifact also contains a self-extracting `*-portable.exe` built from that
+verified bundle with the repository's native portable packer. It is one downloadable
+EXE, but extracts the same DLLs and `data/` files under LocalAppData when launched.
+The build verifies extraction and checks the role export of the extracted DLL.
+The attended approval window and native role restrictions apply to this form too.
+RustDesk already records debug logs under the role's app data directory; its
+rendezvous server remains configurable. No shared default password is supplied.
+
 Packaging fails unless all core bundle files exist, Windows can load the actual DLL,
 the DLL export identifies the requested role, the compiled EXE reports 1.5.1,
 and the packaged GUI process survives a ten-second launch smoke test.
