@@ -56,6 +56,7 @@ pub fn core_main() -> Option<CoreMainAction> {
         }
         if raw.iter().any(|arg| matches!(arg.as_str(),
             "--service" | "--install" | "--silent-install" | "--uninstall"
+            | "--install-service" | "--uninstall-service" | "--portable-service"
             | "--elevate" | "--run-as-system" | "--quick_support")) {
             crate::my_println!("Role builds run as attended portable applications.");
             return None;

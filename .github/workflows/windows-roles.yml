@@ -118,6 +118,10 @@ jobs:
     - name: Test compiled role policy
       shell: bash
       run: cargo test --locked --release --lib --features flutter,hwcodec,vram,role-${{ matrix.role }} role::tests -- --test-threads=1
+    - name: Test Agent native restrictions
+      if: matrix.role == 'agent'
+      shell: bash
+      run: cargo test --locked --release --lib --features flutter,hwcodec,vram,role-agent agent_rejects -- --test-threads=1
     - name: Stage and verify role bundle
       run: python res/roles/package_windows.py --role ${{ matrix.role }} --bundle flutter/build/windows/x64/runner/Release --output dist
     - name: Build and verify attended one-file EXE

@@ -1716,7 +1716,7 @@ fn cm_inner_send(id: i32, data: Data) {
 
 pub fn can_elevate() -> bool {
     #[cfg(windows)]
-    return !crate::platform::is_installed();
+    return !crate::role::AGENT && !crate::platform::is_installed();
     #[cfg(not(windows))]
     return false;
 }
@@ -1724,6 +1724,9 @@ pub fn can_elevate() -> bool {
 pub fn elevate_portable(_id: i32) {
     #[cfg(windows)]
     {
+        if crate::role::AGENT {
+            return;
+        }
         let lock = CLIENTS.read().unwrap();
         if let Some(s) = lock.get(&_id) {
             allow_err!(s.tx.send(ipc::Data::DataPortableService(

@@ -803,6 +803,17 @@ impl Connection {
                         }
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
+                            // A connection manager may receive policy from a custom server.
+                            // Never let it turn Agent's disabled capabilities back on.
+                            if crate::role::AGENT && enabled && matches!(name.as_str(),
+                                "restart" | "block_input" | "privacy_mode")
+                            {
+                                conn.send_to_cm(ipc::Data::SwitchPermission {
+                                    name,
+                                    enabled: false,
+                                });
+                                continue;
+                            }
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
                                 conn.send_permission(Permission::Keyboard, enabled).await;
@@ -967,6 +978,9 @@ impl Connection {
                         }
                         #[cfg(windows)]
                         ipc::Data::DataPortableService(ipc::DataPortableService::RequestStart) => {
+                            if crate::role::AGENT {
+                                continue;
+                            }
                             if let Err(e) = portable_client::start_portable_service(portable_client::StartPara::Direct) {
                                 log::error!("Failed to start portable service from cm: {:?}", e);
                             }
@@ -2692,6 +2706,9 @@ impl Connection {
 
     #[inline]
     pub fn is_permission_enabled_locally(enable_prefix_option: &str) -> bool {
+        if Self::agent_forbids_permission(enable_prefix_option) {
+            return false;
+        }
         #[cfg(feature = "flutter")]
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
@@ -2708,10 +2725,26 @@ impl Connection {
         )
     }
 
+    #[inline]
+    fn agent_forbids_permission(option: &str) -> bool {
+        crate::role::AGENT
+            && matches!(
+                option,
+                keys::OPTION_ENABLE_TERMINAL
+                    | keys::OPTION_ENABLE_TUNNEL
+                    | keys::OPTION_ENABLE_REMOTE_RESTART
+                    | keys::OPTION_ENABLE_BLOCK_INPUT
+                    | keys::OPTION_ENABLE_PRIVACY_MODE
+            )
+    }
+
     fn permission(
         enable_prefix_option: &str,
         control_permissions: &Option<ControlPermissions>,
     ) -> bool {
+        if Self::agent_forbids_permission(enable_prefix_option) {
+            return false;
+        }
         use hbb_common::rendezvous_proto::control_permissions::Permission;
         if let Some(control_permissions) = control_permissions {
             let permission = match enable_prefix_option {
@@ -3961,7 +3994,7 @@ impl Connection {
                     }
                     Some(misc::Union::RestartRemoteDevice(_)) => {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        if self.restart {
+                        if !crate::role::AGENT && self.restart {
                             // force_reboot, not work on linux vm and macos 14
                             #[cfg(any(target_os = "linux", target_os = "windows"))]
                             match system_shutdown::force_reboot() {
@@ -7202,6 +7235,31 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 mod test {
     #[allow(unused)]
     use super::*;
+
+    #[cfg(feature = "role-agent")]
+    #[test]
+    fn agent_rejects_disabled_permissions_from_server_and_local_settings() {
+        // Every two-bit permission is marked enabled by the server, so a false
+        // result proves Agent's restriction has higher priority.
+        let server_permissions = Some(ControlPermissions {
+            permissions: 0xaaaa_aaaa_aaaa_aaaa,
+            ..Default::default()
+        });
+        for option in [
+            keys::OPTION_ENABLE_TERMINAL,
+            keys::OPTION_ENABLE_TUNNEL,
+            keys::OPTION_ENABLE_REMOTE_RESTART,
+            keys::OPTION_ENABLE_BLOCK_INPUT,
+            keys::OPTION_ENABLE_PRIVACY_MODE,
+        ] {
+            assert!(!Connection::permission(option, &server_permissions), "{option}");
+            assert!(!Connection::is_permission_enabled_locally(option), "{option}");
+        }
+        assert!(Connection::permission(
+            keys::OPTION_ENABLE_KEYBOARD,
+            &server_permissions
+        ));
+    }
 
     // The registry is process-global and the harness runs tests in parallel threads, so every
     // test that admits connections holds this first; a poisoned lock is still a lock.
