@@ -38,7 +38,7 @@ def main():
                     '-f', str(bundle), '-o', str(packer), '-e', str(app), '-l', '9'],
                    cwd=root, check=True)
 
-    source = packer / 'target/release/rustdesk-portable-packer.exe'
+    source = root / 'target/release/rustdesk-portable-packer.exe'
     if not source.is_file() or source.stat().st_size < 10_000_000:
         raise RuntimeError('Native self-extracting EXE is missing or too small')
     args.output.mkdir(parents=True, exist_ok=True)
