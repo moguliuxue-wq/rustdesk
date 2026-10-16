@@ -1451,6 +1451,15 @@ class RustdeskImpl {
     throw UnimplementedError("mainDisableAgentUnattended");
   }
 
+  Future<String> mainAgentCaptureSelfTest({dynamic hint}) {
+    throw UnimplementedError("mainAgentCaptureSelfTest");
+  }
+
+  Future<bool> mainSetAgentCaptureDiagnostic(
+      {required bool enabled, dynamic hint}) {
+    throw UnimplementedError("mainSetAgentCaptureDiagnostic");
+  }
+
   Future<bool> mainCheckSuperUserPermission({dynamic hint}) {
     throw UnimplementedError("mainCheckSuperUserPermission");
   }

@@ -40,6 +40,13 @@ Agent or the receiving process ends availability; this build does not install a 
 or silently start at login. This does not defend against malware already running as
 the local user.
 
+Agent also has a local, manually enabled diagnostic panel. The owner must confirm
+authorization in that window before running a self-test. It reports detected display
+count and whether the normal capturer initializes; it does not read, save or transmit
+frames, change another process, or override window capture restrictions. The panel
+switch resets to off when Agent closes. Initialization success is not proof that a
+particular protected window can be captured.
+
 ## Build
 
 Use the **Windows Controller and Agent** workflow. Pushes to `role/controller-agent`
