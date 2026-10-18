@@ -39,9 +39,9 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
-// Agent-only self-process Win32 diagnostic: compiled but disabled by default.
-// We vendor MinHook 1.3.4 rather than loading or injecting a separate DLL.
-// Controller and standard RustDesk never link the library.
+# Agent-only self-process Win32 diagnostic: compiled but disabled by default.
+# We vendor MinHook 1.3.4 rather than loading or injecting a separate DLL.
+# Controller and standard RustDesk never link the library.
 if("$ENV{RUSTDESK_AGENT_MINHOOK_BUILD}" STREQUAL "1")
   enable_language(C)
   set(AGENT_MINHOOK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/minhook-1.3.4")
