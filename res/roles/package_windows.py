@@ -62,6 +62,11 @@ def main():
         'Use the visible connection manager Disconnect button or close its window to end sessions.\n'
         'Installation, privacy screen, input blocking,\n'
         'remote elevation, terminal and TCP tunnels are disabled in Agent.\n', encoding='utf-8')
+    if args.role == 'agent':
+        license_file = Path('flutter/windows/runner/vendor/minhook-1.3.4/LICENSE.txt')
+        if not license_file.exists():
+            raise RuntimeError('MinHook license file missing')
+        shutil.copy2(license_file, bundle / 'MinHook-LICENSE.txt')
     files = {p.relative_to(bundle).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(bundle.rglob('*')) if p.is_file()}
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()

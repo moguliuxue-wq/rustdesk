@@ -981,6 +981,9 @@ def build_flutter_windows(version, features, skip_portable_pack, role='standard'
             print("cargo build failed, please check rust source code.")
             exit(-1)
     os.chdir('flutter')
+    # Explicit build selector read by flutter/windows/runner/CMakeLists.txt.
+    # No MinHook code is linked into Controller or standard RustDesk.
+    os.environ['RUSTDESK_AGENT_MINHOOK_BUILD'] = '1' if role == 'agent' else '0'
     system2(f'flutter build windows --release --dart-define=RUSTDESK_ROLE={role}')
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
