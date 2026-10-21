@@ -995,6 +995,9 @@ pub mod client {
     // 2) Start helper process (direct or logon) with shmem argument.
     // 3) Keep STARTING=true until IPC ping/pong marks RUNNING, or timeout watchdog resets it.
     pub(crate) fn start_portable_service(para: StartPara) -> ResultType<()> {
+        if crate::role::AGENT {
+            bail!("Agent cannot start portable service");
+        }
         log::info!("start portable service");
         let launch_token = {
             // Keep lock guards in explicit short scopes to make it obvious
@@ -1595,6 +1598,12 @@ pub struct FrameInfo {
 #[cfg(test)]
 mod tests {
     use super::{is_valid_capture_frame_length, ADDR_CAPTURE_FRAME};
+
+    #[cfg(feature = "role-agent")]
+    #[test]
+    fn agent_rejects_portable_service_before_launch() {
+        assert!(super::client::start_portable_service(super::client::StartPara::Direct).is_err());
+    }
 
     #[test]
     fn test_is_valid_capture_frame_length_rejects_out_of_bounds_length() {

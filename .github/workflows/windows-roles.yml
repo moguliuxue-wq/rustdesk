@@ -1,0 +1,136 @@
+name: Windows Controller and Agent
+'on':
+  workflow_dispatch: null
+  push:
+    branches:
+    - role/controller-agent
+permissions:
+  contents: read
+concurrency:
+  group: windows-roles-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  SCITER_RUST_VERSION: '1.75'
+  LLVM_VERSION: 15.0.6
+  FLUTTER_VERSION: 3.24.5
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  VCPKG_CMAKE_VERSION: 4.3.0
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+  build:
+    name: ${{ matrix.role }} / Windows x64
+    needs:
+    - generate-bridge
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        role:
+        - controller
+        - agent
+        job:
+        - target: x86_64-pc-windows-msvc
+          os: windows-2022
+          arch: x86_64
+          flutter-arch: x64
+          vcpkg-triplet: x64-windows-static
+    steps:
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+    - name: Checkout source code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        submodules: recursive
+    - name: Restore bridge files
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: bridge-artifact
+        path: ./
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+      with:
+        version: ${{ env.LLVM_VERSION }}
+    - name: Install flutter
+      id: flutter
+      uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+      with:
+        channel: stable
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        architecture: x64
+    - name: Replace engine with rustdesk custom flutter engine
+      run: |
+        flutter doctor -v
+        flutter precache --windows
+        Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+        Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+        mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+    - name: Patch flutter
+      shell: bash
+      run: |
+        cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+        cd $(dirname $(dirname $(which flutter)))
+        if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+          git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+        fi
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: ${{ env.SCITER_RUST_VERSION }}
+        targets: ${{ matrix.job.target }}
+        components: rustfmt
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      with:
+        prefix-key: windows-role-${{ matrix.role }}
+    - name: Setup vcpkg with Github Actions binary cache
+      uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+      with:
+        vcpkgDirectory: C:\vcpkg
+        vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+        doNotCache: false
+    - name: Install vcpkg dependencies
+      env:
+        VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+      run: |
+        if ! $VCPKG_ROOT/vcpkg \
+          install \
+          --triplet ${{ matrix.job.vcpkg-triplet }} \
+          --x-install-root="$VCPKG_ROOT/installed"; then
+          find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+            echo "$_1:"
+            echo "======"
+            cat "$_1"
+            echo "======"
+            echo ""
+          done
+          exit 1
+        fi
+        head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+      shell: bash
+    - name: Check build selector
+      run: python -m unittest discover -s tests/roles -v
+    - name: Build actual Rust DLL and Flutter EXE
+      run: python build.py --portable --flutter --skip-portable-pack --hwcodec --vram --role ${{ matrix.role }}
+    - name: Test compiled role policy
+      shell: bash
+      run: cargo test --locked --release --lib --features flutter,hwcodec,vram,role-${{ matrix.role }} role::tests -- --test-threads=1
+    - name: Test Agent native restrictions and unattended gate
+      if: matrix.role == 'agent'
+      shell: bash
+      run: cargo test --locked --release --lib --features flutter,hwcodec,vram,role-agent agent_ -- --test-threads=1
+    - name: Stage and verify role bundle
+      run: python res/roles/package_windows.py --role ${{ matrix.role }} --bundle flutter/build/windows/x64/runner/Release --output dist
+    - name: Build and verify one-file EXE
+      run: |
+        python -m pip install -r libs/portable/requirements.txt
+        python res/roles/build_onefile.py --role ${{ matrix.role }} --bundle flutter/build/windows/x64/runner/Release --output dist
+    - name: Upload complete runnable bundle
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: RustDesk-1.5.1-${{ matrix.role }}-windows-x64
+        path: dist/*
+        if-no-files-found: error

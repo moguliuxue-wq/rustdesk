@@ -11,6 +11,10 @@
 #include "flutter_window.h"
 #include "utils.h"
 
+#ifdef RUSTDESK_AGENT_MINHOOK_BUILD
+#include "agent_hook_diagnostics.h"
+#endif
+
 typedef char** (*FUNC_RUSTDESK_CORE_MAIN)(int*);
 typedef void (*FUNC_RUSTDESK_FREE_ARGS)( char**, int);
 typedef int (*FUNC_RUSTDESK_GET_APP_NAME)(wchar_t*, int);
@@ -180,12 +184,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
   window.SetQuitOnClose(true);
 
+#ifdef RUSTDESK_AGENT_MINHOOK_BUILD
+  agent_hook_diagnostics::StartIfRequested();
+#endif
+
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0))
   {
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
   }
+
+#ifdef RUSTDESK_AGENT_MINHOOK_BUILD
+  agent_hook_diagnostics::Stop();
+#endif
 
   ::CoUninitialize();
   return EXIT_SUCCESS;

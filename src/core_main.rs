@@ -47,11 +47,28 @@ pub fn core_main() -> Option<CoreMainAction> {
         return None;
     }
     crate::load_custom_client();
+    crate::role::init();
+    if crate::role::SPLIT {
+        let raw: Vec<String> = std::env::args().skip(1).collect();
+        if raw.first().map(String::as_str) == Some("--build-role") {
+            println!("{}", crate::role::name());
+            return None;
+        }
+        if raw.iter().any(|arg| matches!(arg.as_str(),
+            "--service" | "--install" | "--silent-install" | "--uninstall"
+            | "--install-service" | "--uninstall-service" | "--portable-service"
+            | "--elevate" | "--run-as-system" | "--quick_support")) {
+            crate::my_println!("Role builds run as attended portable applications.");
+            return None;
+        }
+    }
     #[cfg(windows)]
     if !crate::platform::windows::bootstrap() {
         // return None to terminate the process
         return None;
     }
+    // Bootstrap may reload a staged custom configuration.
+    crate::role::init();
     let mut args = Vec::new();
     let mut flutter_args = Vec::new();
     let mut i = 0;
@@ -159,7 +176,7 @@ pub fn core_main() -> Option<CoreMainAction> {
     }
     #[cfg(windows)]
     {
-        _is_quick_support |= !crate::platform::is_installed()
+        _is_quick_support |= !crate::role::SPLIT && !crate::platform::is_installed()
             && args.is_empty()
             && (is_quick_support_exe(&arg_exe)
                 || config::LocalConfig::get_option("pre-elevate-service") == "Y"

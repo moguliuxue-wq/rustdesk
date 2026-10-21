@@ -17,6 +17,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../common.dart';
+import '../role_mode.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
@@ -1109,7 +1110,7 @@ class _CmControlPanel extends StatelessWidget {
                       color: MyTheme.accent,
                       onClick: () {
                         handleAccept(context);
-                        windowManager.minimize();
+                        if (!isAgentBuild) windowManager.minimize();
                       },
                       text: 'Accept',
                       textColor: Colors.white,

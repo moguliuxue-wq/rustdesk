@@ -1,3 +1,4 @@
+import '../role_mode.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -49,6 +50,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsCanRecordAudio = false;
   Timer? _updateTimer;
   bool isCardClosed = false;
+  bool _agentDiagnosticsEnabled = false;
+  bool _agentDiagnosticsRunning = false;
+  String? _agentDiagnosticsResult;
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
@@ -79,6 +83,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     final isIncomingOnly = bind.isIncomingOnly();
     final isOutgoingOnly = bind.isOutgoingOnly();
     final children = <Widget>[
+      if (isAgentBuild || isControllerBuild)
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(
+            isAgentBuild
+                ? 'Agent · 被控端\n连接管理窗口可查看状态并断开。'
+                : 'Controller · 主控端\n仅发起连接；请等待对方明确允许。',
+            textAlign: TextAlign.center,
+          ),
+        ),
       if (!isOutgoingOnly) buildPresetPasswordWarning(),
       if (bind.isCustomClient())
         Align(
@@ -91,7 +105,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       ),
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
-      if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (isAgentBuild) buildAgentUnattendedPanel(context),
+      if (isAgentBuild) buildAgentDiagnosticsPanel(context),
+      if (!isOutgoingOnly && !isAgentBuild) buildPasswordBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -183,6 +199,281 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       color: Theme.of(context).scaffoldBackgroundColor,
       child: ConnectionPage(),
     );
+  }
+
+  Widget buildAgentUnattendedPanel(BuildContext context) {
+    return FutureBuilder<String>(
+      future: bind.mainGetCommon(key: 'agent-unattended-enabled'),
+      builder: (context, snapshot) {
+        final enabled = snapshot.data == 'true';
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(enabled ? '无人值守访问：已开启' : '无人值守访问：未开启',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 5),
+              Text(enabled
+                  ? '使用本机设置的独立密码连接，无需逐次点击。连接窗口会显示对方并提供断开按钮。'
+                  : '默认每次连接都需要本机点击允许。设备所有者可以在这里设置独立密码后开启无人值守。'),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, children: [
+                OutlinedButton(
+                  onPressed: _showAgentUnattendedDialog,
+                  child: Text(enabled ? '更换访问密码' : '设置密码并开启'),
+                ),
+                if (enabled)
+                  TextButton(
+                    onPressed: _disableAgentUnattended,
+                    child: const Text('撤销无人值守'),
+                  ),
+              ]),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showAgentUnattendedDialog() async {
+    await windowManager.setSize(const Size(480, 600));
+    final password = TextEditingController();
+    final confirmation = TextEditingController();
+    var ownerConfirmed = false;
+    var saving = false;
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('开启 Agent 无人值守访问'),
+          content: SingleChildScrollView(
+            child: SizedBox(
+              width: 350,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('请在被控设备本机设置专用密码。此后持有密码的人可连接；连接状态和断开入口始终可见。'),
+                  TextField(
+                    controller: password,
+                    obscureText: true,
+                    maxLength: bind.mainMaxEncryptLen(),
+                    decoration: const InputDecoration(labelText: '专用密码（至少 12 个字符）'),
+                  ),
+                  TextField(
+                    controller: confirmation,
+                    obscureText: true,
+                    maxLength: bind.mainMaxEncryptLen(),
+                    decoration: const InputDecoration(labelText: '再次输入密码'),
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: ownerConfirmed,
+                    title: const Text('我是设备所有者或已获授权，确认开启无人值守访问'),
+                    onChanged: saving
+                        ? null
+                        : (value) => updateDialog(() => ownerConfirmed = value == true),
+                  ),
+                  if (error != null)
+                    Text(error!, style: const TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            ElevatedButton(
+              onPressed: !ownerConfirmed || saving
+                  ? null
+                  : () async {
+                      final value = password.text;
+                      if (value.length < 12 || value.trim() != value) {
+                        updateDialog(() => error = '密码至少 12 个字符，且首尾不能有空格');
+                        return;
+                      }
+                      if (value != confirmation.text) {
+                        updateDialog(() => error = '两次输入的密码不一致');
+                        return;
+                      }
+                      updateDialog(() {
+                        saving = true;
+                        error = null;
+                      });
+                      var ok = false;
+                      try {
+                        ok = await bind.mainEnableAgentUnattended(password: value);
+                      } catch (_) {
+                        ok = false;
+                      }
+                      if (!dialogContext.mounted) return;
+                      if (ok) {
+                        Navigator.of(dialogContext).pop();
+                        if (mounted) setState(() {});
+                      } else {
+                        updateDialog(() {
+                          saving = false;
+                          error = '开启失败，请确认本机密码设置未被锁定后重试';
+                        });
+                      }
+                    },
+              child: const Text('确认开启'),
+            ),
+          ],
+        ),
+      ),
+    );
+    password.dispose();
+    confirmation.dispose();
+    if (mounted) _updateWindowSize();
+  }
+
+  Future<void> _disableAgentUnattended() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('撤销无人值守访问？'),
+        content: const Text('将清除专用密码。以后新连接必须在本机点击允许；已有连接请在连接管理窗口断开。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('撤销'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final ok = await bind.mainDisableAgentUnattended();
+    if (!mounted) return;
+    setState(() {});
+    if (!ok) showToast('已停止无人值守，但清除密码失败，请重试');
+  }
+
+  Widget buildAgentDiagnosticsPanel(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('本机诊断：${_agentDiagnosticsEnabled ? '已开启' : '未开启'}',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 5),
+          const Text('手动检查本机屏幕数量与正常采集器能否初始化；不保存或传输画面。'),
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, children: [
+            if (!_agentDiagnosticsEnabled)
+              OutlinedButton(
+                onPressed: _enableAgentDiagnostics,
+                child: const Text('开启诊断'),
+              ),
+            if (_agentDiagnosticsEnabled) ...[
+              OutlinedButton(
+                onPressed: _agentDiagnosticsRunning ? null : _runAgentDiagnostics,
+                child: Text(_agentDiagnosticsRunning ? '检查中…' : '运行自检'),
+              ),
+              TextButton(
+                onPressed: _agentDiagnosticsRunning
+                    ? null
+                    : _disableAgentDiagnostics,
+                child: const Text('关闭诊断'),
+              ),
+            ],
+          ]),
+          if (_agentDiagnosticsResult != null) ...[
+            const SizedBox(height: 6),
+            SelectableText(_agentDiagnosticsResult!),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _enableAgentDiagnostics() async {
+    var confirmed = false;
+    final enabled = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('开启本机诊断'),
+          content: CheckboxListTile(
+            value: confirmed,
+            title: const Text('我已获设备所有者授权，在本机运行采集初始化自检'),
+            subtitle: const Text('只检查屏幕枚举与正常采集器初始化，不修改其他程序或截屏保护。'),
+            onChanged: (value) => updateDialog(() => confirmed = value == true),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            ElevatedButton(
+              onPressed: confirmed
+                  ? () => Navigator.of(dialogContext).pop(true)
+                  : null,
+              child: const Text('开启'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (enabled == true && mounted) {
+      try {
+        final accepted = await bind.mainSetAgentCaptureDiagnostic(enabled: true);
+        if (accepted && mounted) {
+          setState(() => _agentDiagnosticsEnabled = true);
+        }
+      } catch (_) {
+        if (mounted) showToast('无法开启本机诊断');
+      }
+    }
+  }
+
+  Future<void> _disableAgentDiagnostics() async {
+    try {
+      await bind.mainSetAgentCaptureDiagnostic(enabled: false);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _agentDiagnosticsEnabled = false;
+      _agentDiagnosticsResult = null;
+    });
+  }
+
+  Future<void> _runAgentDiagnostics() async {
+    if (!_agentDiagnosticsEnabled || _agentDiagnosticsRunning) return;
+    setState(() {
+      _agentDiagnosticsRunning = true;
+      _agentDiagnosticsResult = null;
+    });
+    String result;
+    try {
+      final data = jsonDecode(await bind.mainAgentCaptureSelfTest());
+      if (data is! Map) {
+        result = '自检返回的数据无效';
+      } else if (data['error'] != null) {
+        result = '自检失败：${data['error']}';
+      } else {
+        final lines = <String>['检测到 ${data['display_count']} 个屏幕'];
+        for (final item in data['results'] ?? []) {
+          lines.add('屏幕 ${item['display']}：${item['ok'] == true ? '采集器初始化成功' : '初始化失败：${item['error']}'}');
+        }
+        result = lines.join('\n');
+      }
+    } catch (_) {
+      result = '自检调用失败，请重试';
+    }
+    if (!mounted) return;
+    setState(() {
+      _agentDiagnosticsRunning = false;
+      _agentDiagnosticsResult = result;
+    });
   }
 
   buildIDBoard(BuildContext context) {
@@ -871,6 +1162,11 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   void dispose() {
+    if (_agentDiagnosticsEnabled) {
+      unawaited(bind
+          .mainSetAgentCaptureDiagnostic(enabled: false)
+          .then<void>((_) {}, onError: (Object _) {}));
+    }
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();
