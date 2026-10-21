@@ -9,6 +9,48 @@ import shutil
 import subprocess
 
 
+def stage_licenses(bundle, role, revision):
+    root = Path(__file__).resolve().parents[2]
+    sources = {'LICENCE': root / 'LICENCE',
+               'licenses/enigo-LICENSE.txt': root / 'libs/enigo/LICENSE'}
+    if role == 'agent':
+        sources['MinHook-LICENSE.txt'] = (
+            root / 'flutter/windows/runner/vendor/minhook-1.3.4/LICENSE.txt')
+    installed = os.environ.get('VCPKG_INSTALLED_ROOT')
+    if not installed:
+        if not os.environ.get('VCPKG_ROOT'):
+            raise RuntimeError('VCPKG_ROOT or VCPKG_INSTALLED_ROOT is required for licenses')
+        installed = Path(os.environ['VCPKG_ROOT']) / 'installed'
+    # Match the native libraries linked by the Windows x64 role workflow.
+    share = Path(installed) / 'x64-windows-static/share'
+    native_licenses = set(share.glob('*/copyright'))
+    native_licenses.update(share / name / 'copyright' for name in (
+        'aom', 'ffmpeg', 'libjpeg-turbo', 'libvpx', 'libyuv', 'mfx-dispatch', 'opus'))
+    for source in sorted(native_licenses):
+        sources[f'licenses/vcpkg/{source.parent.name}/copyright'] = source
+    notices = bundle / 'data/flutter_assets/NOTICES.Z'
+    if not notices.is_file() or not notices.stat().st_size:
+        raise RuntimeError('Flutter license notices missing or empty')
+    for source in sources.values():
+        if not source.is_file() or not source.stat().st_size:
+            raise RuntimeError(f'License file missing or empty: {source}')
+    for name, source in sources.items():
+        target = bundle / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    (bundle / 'NOTICE.txt').write_text(
+        'RustDesk upstream copyright notice:\n'
+        'Copyright © 2026 Purslane Tech Pte. Ltd. All rights reserved.\n'
+        f'This is a modified RustDesk 1.5.1 {role.title()} build.\n'
+        'RustDesk license: GNU Affero General Public License v3; see LICENCE.\n'
+        f'Source revision: https://github.com/moguliuxue-wq/rustdesk/tree/{revision}\n'
+        'Build instructions: docs/windows-roles.md in that source revision.\n'
+        'Third-party license and copyright notices: licenses/ and, for Agent,\n'
+        'MinHook-LICENSE.txt. Flutter notices remain in data/flutter_assets/NOTICES.Z\n'
+        '(gzip-compressed text). These materials also travel inside the portable EXE\n'
+        f'and are extracted to %LOCALAPPDATA%/rustdesk{role}/.\n', encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--role', required=True, choices=['controller', 'agent'])
@@ -62,14 +104,10 @@ def main():
         'Use the visible connection manager Disconnect button or close its window to end sessions.\n'
         'Installation, privacy screen, input blocking,\n'
         'remote elevation, terminal and TCP tunnels are disabled in Agent.\n', encoding='utf-8')
-    if args.role == 'agent':
-        license_file = Path('flutter/windows/runner/vendor/minhook-1.3.4/LICENSE.txt')
-        if not license_file.exists():
-            raise RuntimeError('MinHook license file missing')
-        shutil.copy2(license_file, bundle / 'MinHook-LICENSE.txt')
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    stage_licenses(bundle, args.role, revision)
     files = {p.relative_to(bundle).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(bundle.rglob('*')) if p.is_file()}
-    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     manifest = {'version': '1.5.1', 'role': args.role, 'commit': revision,
                 'verification': ['DLL role export', 'EXE --version', '10 second GUI launch'],
                 'interactive_session_tested': False, 'sha256': files}

@@ -10,6 +10,13 @@ import subprocess
 import sys
 
 
+def verify_extracted_files(extracted, hashes):
+    for name, expected in hashes.items():
+        path = extracted / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError(f'One-file extracted file missing or changed: {name}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--role', choices=('controller', 'agent'), required=True)
@@ -24,6 +31,13 @@ def main():
     manifest = json.loads((bundle / 'build-manifest.json').read_text(encoding='utf-8'))
     if manifest['role'] != args.role or manifest['version'] != '1.5.1':
         raise RuntimeError('The input bundle is not the requested role and version')
+    required_licenses = ['LICENCE', 'NOTICE.txt', 'licenses/enigo-LICENSE.txt',
+                         'data/flutter_assets/NOTICES.Z']
+    if args.role == 'agent':
+        required_licenses.append('MinHook-LICENSE.txt')
+    for name in required_licenses:
+        if name not in manifest['sha256']:
+            raise RuntimeError(f'License material missing from verified manifest: {name}')
     for name, expected in manifest['sha256'].items():
         path = bundle / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -52,6 +66,7 @@ def main():
     subprocess.run([str(output), '--version'], cwd=args.output, check=True,
                    timeout=90, capture_output=True)
     extracted = Path(os.environ['LOCALAPPDATA']) / f'rustdesk{args.role}'
+    verify_extracted_files(extracted, manifest['sha256'])
     for name in (f'RustDesk{title}.exe', 'librustdesk.dll',
                  'flutter_windows.dll', 'data/icudtl.dat',
                  'data/app.so', 'data/flutter_assets'):
